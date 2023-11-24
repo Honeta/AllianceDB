@@ -27,7 +27,7 @@ public:
         NEW_R,
         NEW_S,
         ACK_R,
-        ACK_S,
+        ACK_S,  
         FLUSH,
     };
     static constexpr char *MsgStr[6] = {"STOP", "NEW_R", "NEW_S", "ACK_R", "ACK_S", "FLUSH"};

@@ -1,22 +1,24 @@
 #include "Join/HandshakeJoin.hpp"
-#include "Utils/Logger.hpp"
 
 #include <cassert>
 #include <cmath>
 #include <memory>
 #include <thread>
 
+#include "Utils/Logger.hpp"
+
 using namespace AllianceDB;
 using namespace std;
 
-HandshakeJoin::HandshakeJoin(const Param &param, size_t window_id) : param(param) {
+HandshakeJoin::HandshakeJoin(const Param &param, size_t window_id)
+    : param(param) {
   auto num_workers = param.num_threads;
   for (auto i = 0; i < num_workers; ++i) {
     workers.push_back(std::make_shared<Worker>(param));
   }
   dummy = std::make_shared<Worker>(param);
   dummy->id = -1;
-  size_t subwindow = round((double) param.window_length / num_workers);
+  size_t subwindow = round((double)param.window_length / num_workers);
   size_t offs = 0, offr = 0;
   for (auto i = 0; i < num_workers; ++i) {
     workers[i]->window_id = window_id;
@@ -30,7 +32,8 @@ HandshakeJoin::HandshakeJoin(const Param &param, size_t window_id) : param(param
       workers[i]->right_send_queue = workers[i + 1]->left_recv_queue;
     }
     workers[i]->window = subwindow;
-    if (i == num_workers - 1) workers[i]->window = param.window_length - subwindow * (num_workers - 1);
+    if (i == num_workers - 1)
+      workers[i]->window = param.window_length - subwindow * (num_workers - 1);
     offr = param.window_length - offs - workers[i]->window;
     workers[i]->offs = offs;
     workers[i]->offr = offr;
@@ -42,11 +45,14 @@ HandshakeJoin::HandshakeJoin(const Param &param, size_t window_id) : param(param
 
 void HandshakeJoin::Feed(TuplePtr tuple) {
   if (tuple->st == StreamType::R) {
-    while (!workers[0]->inputr.push(tuple));
+    while (!workers[0]->inputr.push(tuple))
+      ;
     workers[0]->Send(workers[0]->left_recv_queue, Msg::NEW_R);
   } else {
-    while (!workers[param.num_threads - 1]->inputs.push(tuple));
-    workers[param.num_threads - 1]->Send(workers[param.num_threads - 1]->right_recv_queue, Msg::NEW_S);
+    while (!workers[param.num_threads - 1]->inputs.push(tuple))
+      ;
+    workers[param.num_threads - 1]->Send(
+        workers[param.num_threads - 1]->right_recv_queue, Msg::NEW_S);
   }
 }
 
@@ -58,8 +64,8 @@ void HandshakeJoin::Start(Context &ctx) {
 
 void HandshakeJoin::Wait() {
   workers[0]->Send(workers[0]->left_recv_queue, Msg::STOP);
-  workers[param.num_threads - 1]->Send(workers[param.num_threads - 1]->right_recv_queue,
-                                       Msg::STOP);
+  workers[param.num_threads - 1]->Send(
+      workers[param.num_threads - 1]->right_recv_queue, Msg::STOP);
   for (auto &w : workers) {
     w->Wait();
     DEBUG("Worker joined");
@@ -72,21 +78,25 @@ HandshakeJoin::Worker::Worker(const Param &param)
       inputs(param.window_length * 2),
       msgi(1),
       msgo(1),
-      left_recv_queue(std::make_shared<spsc_queue<Msg>>(param.window_length * 2)),
-      right_recv_queue(std::make_shared<spsc_queue<Msg>>(param.window_length * 2)) {}
+      left_recv_queue(
+          std::make_shared<spsc_queue<Msg>>(param.window_length * 2)),
+      right_recv_queue(
+          std::make_shared<spsc_queue<Msg>>(param.window_length * 2)) {}
 
 void HandshakeJoin::Worker::Run(Context &ctx) {
-  // DEBUG("Worker %d started", id);
+  DEBUG("Worker %d started", id);
   Msg msg;
   while (true) {
     if (stopr && stops && Empty(left_recv_queue) && Empty(right_recv_queue)) {
       break;
     }
     if (!Empty(left_recv_queue) &&
-        (!Full(right_send_queue) || (Peek(left_recv_queue, msg) && msg == Msg::ACK_S)))
+        (!Full(right_send_queue) ||
+         (Peek(left_recv_queue, msg) && msg == Msg::ACK_S)))
       ProcessLeft(ctx);
     if (!Empty(right_recv_queue) &&
-        (!Full(left_send_queue) || (Peek(right_recv_queue, msg) && msg == Msg::ACK_R)))
+        (!Full(left_send_queue) ||
+         (Peek(right_recv_queue, msg) && msg == Msg::ACK_R)))
       ProcessRight(ctx);
     Expire();
   }
@@ -103,7 +113,8 @@ void HandshakeJoin::Worker::Wait() {
 }
 
 HandshakeJoin::Msg HandshakeJoin::Worker::RecvIn() {
-  while (msgo.empty()) {}
+  while (msgo.empty()) {
+  }
   auto msg = msgo.front();
   msgo.pop();
   return msg;
@@ -113,20 +124,26 @@ void HandshakeJoin::Worker::Expire() {
   if (sents != ends) {
     if (!Full(left_send_queue) && sents - starts < MAX_OUTSTANDING_ACKS &&
         left->ends - left->starts < (ends - starts + MAX_LOAD_DIFF)) {
-      left->inputs.push(locals[sents++]);
+      while (!left->inputs.push(locals[sents]))
+        ;
+      sents++;
       Send(left_send_queue, Msg::NEW_S);
     }
   }
   if (sentr != endr) {
     if (!Full(right_send_queue) && sentr - startr < MAX_OUTSTANDING_ACKS &&
         right->endr - right->startr < (endr - startr + MAX_LOAD_DIFF)) {
-      right->inputr.push(localr[sentr++]);
+      while (!right->inputr.push(localr[sentr]))
+        ;
+      sentr++;
       Send(right_send_queue, Msg::NEW_R);
     }
   }
 }
 
-bool HandshakeJoin::Worker::Empty(const MsgQueue &q) { return q != nullptr && q->empty(); }
+bool HandshakeJoin::Worker::Empty(const MsgQueue &q) {
+  return q != nullptr && q->empty();
+}
 
 bool HandshakeJoin::Worker::Full(const MsgQueue &q) {
   return q != nullptr && q->write_available() == 0;
@@ -139,7 +156,7 @@ bool HandshakeJoin::Worker::Peek(MsgQueue &q, Msg &msg) {
   }
   return false;
 }
-
+#include <unistd.h>
 void HandshakeJoin::Worker::ProcessLeft(Context &ctx) {
   // DEBUG("Worker %d process left", id);
   Msg msg;
@@ -156,7 +173,8 @@ void HandshakeJoin::Worker::ProcessLeft(Context &ctx) {
     localr.push_back(r);
     ++endr;
     Send(left_send_queue, Msg::ACK_R);
-    // DEBUG("Worker %d: R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, localr.size(), startr,
+    // DEBUG("Worker %d: R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, localr.size(),
+    // startr,
     //     endr, sentr, locals.size(), starts, ends, sents);
   } else if (msg == Msg::ACK_S) {
     Recv(left_recv_queue, msg);
@@ -168,7 +186,11 @@ void HandshakeJoin::Worker::ProcessLeft(Context &ctx) {
     stopr = true;
     DEBUG("STOP left %d in %d", id, window_id);
     while (sentr != endr) {
-      right->inputr.push(localr[sentr++]);
+      while (!right->inputr.push(localr[sentr]))
+        ;
+      cout << "thread " << std::this_thread::get_id() << ": " << sentr
+           << " sendr succ" << endl;
+      sentr++;
       Send(right_send_queue, Msg::NEW_R);
     }
     Send(right_send_queue, msg);
@@ -197,7 +219,8 @@ void HandshakeJoin::Worker::ProcessRight(Context &ctx) {
     locals.push_back(s);
     ++ends;
     Send(right_send_queue, Msg::ACK_S);
-    // DEBUG("Worker %d: R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, localr.size(), startr,
+    // DEBUG("Worker %d: R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, localr.size(),
+    // startr,
     //     endr, sentr, locals.size(), starts, ends, sents);
   } else if (msg == Msg::ACK_R) {
     Recv(right_recv_queue, msg);
@@ -210,7 +233,11 @@ void HandshakeJoin::Worker::ProcessRight(Context &ctx) {
     // DEBUG("STOP right %d in %d", id, window_id);
     while (sents != ends) {
       {
-        left->inputs.push(locals[sents++]);
+        while (!left->inputs.push(locals[sents]))
+          ;
+        cout << "thread " << std::this_thread::get_id() << ": " << sents
+             << " sends succ" << endl;
+        sents++;
         Send(left_send_queue, Msg::NEW_S);
       }
     }
@@ -221,17 +248,18 @@ void HandshakeJoin::Worker::ProcessRight(Context &ctx) {
 }
 
 void HandshakeJoin::Worker::Send(MsgQueue &q, Msg msg) {
-  // DEBUG("Worker %d(%d) send %s, R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, window_id,
-  //     MsgStr[(int)msg], localr.size(), startr, endr, sentr, locals.size(), starts, ends,
-  //     sents);
+  DEBUG("Worker %d(%d) send %s, R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id,
+        window_id, MsgStr[(int)msg], localr.size(), startr, endr, sentr,
+        locals.size(), starts, ends, sents);
   if (q == nullptr) return;
-  while (!q->push(msg));
+  while (!q->push(msg))
+    ;
 }
 
 void HandshakeJoin::Worker::Recv(MsgQueue &q, Msg &msg) {
-  // DEBUG("Worker %d(%d) recv %s, R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id, window_id,
-  //     MsgStr[(int)msg], localr.size(), startr, endr, sentr, locals.size(), starts, ends,
-  //     sents);
+  DEBUG("Worker %d(%d) recv %s, R[%d][%d,%d,%d], S[%d][%d,%d,%d]", id,
+        window_id, MsgStr[(int)msg], localr.size(), startr, endr, sentr,
+        locals.size(), starts, ends, sents);
   if (q == nullptr) return;
   msg = q->front();
   q->pop();
